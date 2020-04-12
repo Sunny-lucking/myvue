@@ -86,3 +86,46 @@
 ![image.png](/img/bVbFVdr)
 
 至此，我们已经实现了数据监听，但是还有个问题，即Object.defineProperty的问题，也是面试常见的问题，即Object.defineProperty是无法监听数组的变化的
+
+3 重写数组方法
+
+如图所示，我们企图往数组arr中添加值，结果发现新添加进去的值是没办法被监听到的，因此，我们需要改写push等方法
+![image.png](/img/bVbFVjS)
+![image.png](/img/bVbFVkL)
+
+基本思路就是之前我们调用push方法时，是从Aarray.prototype寻找这个方法，我们改成我们用一个空对象{} 继承 Aarray.prototype，然后再给空对象添加push方法
+```
+{
+    push：function(){}
+}
+```
+这样，我们调用push的时候，实际上就是调用上面{}中的push
+
+现在，我们先区分出用户传入的Observe中接受监听的data是数组还是对象，如果是数组，则改变数组的原型链，这样才能改变调用push时，是调用我们自己设置的push，
+只需要改Observe中
+![image.png](/img/bVbFVmv)
+
+其中的`arrayMethods`则是我们一直说的那个对象{},它里面添加push等方法属性
+![image.png](/img/bVbFVmV)
+
+现在，我们看下，调用push时是否调用了 对象{}（即arrayMethods）中的方法
+![image.png](/img/bVbFVmX)
+
+可见已经调用了arrayMethods里的push，然后arrayMethods里的push再调用来原先原型链上的push
+现在完善 arrayMethods里面的方法
+![image.png](/img/bVbFVrB)
+
+打印下看看
+![image.png](/img/bVbFVrN)
+![image.png](/img/bVbFVrR)
+发现新添加的属性成功实现了监听
+但是，发现
+![image.png](/img/bVbFVrS)
+这个初始化的时候的属性并没有监听到
+所以在初始化的时候也要调用`observerArray(data)`
+![image.png](/img/bVbFVrZ)
+再打印，发现初始化的数组属性也成功实现了监听
+![image.png](/img/bVbFVr4)
+
+源码地址：https://github.com/peigexing/myvue
+
