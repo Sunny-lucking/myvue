@@ -12,8 +12,9 @@ let vm = new MyVue({
         }
     }
 })
-vm._data.wife = {
+vm._data.message = {
     name:'迪丽热巴',
     age:30
 }
 console.log(vm)
+console.log(vm.message)

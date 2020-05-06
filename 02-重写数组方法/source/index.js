@@ -13,5 +13,7 @@ MyVue.prototype._init = function (options) {
     initState(vm)
 }
 
+
+
 export default MyVue
 

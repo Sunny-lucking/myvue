@@ -12,13 +12,13 @@ function initData(vm) {
     let data = vm.$optios.data
     // 判断是不是函数，我们知道vue，使用data的时候可以data：{}这种形式，也可以data(){return{}}这种形式
     // 然后把把用户传入的打他数据赋值给vm._data
-    vm._data = typeof data === 'function' ? data.call(vm) : data ||{}
+    data = vm._data = typeof data === 'function' ? data.call(vm) : data ||{}
 
-    for (let key in vm._data) {
+    for (let key in data) {
         proxy(vm,"_data",key)
     }
 
-    observe(vm._data)
+    observe(data)
 }
 
 function proxy(vm,source,key) {

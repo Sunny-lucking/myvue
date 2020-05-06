@@ -13,5 +13,6 @@ let vm = new MyVue({
         }
     }
 })
-vm.arr.push({hah:'dasd'})
+vm.arr[0] = "我改了"
+// vm.arr.push(6)
 console.log(vm)
