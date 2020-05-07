@@ -10,7 +10,8 @@ export const util = {
     },
     compilerText(node,vm){
         node.textContent = node.textContent.replace(defaultRGE,function (...arg) {
-           return util.getValue(vm,arg[1])
+            console.log(arg);
+            return util.getValue(vm,arg[1])
         })
     }
 }

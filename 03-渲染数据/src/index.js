@@ -15,3 +15,4 @@ let vm = new MyVue({
 })
 vm.arr.push({hah:'dasd'})
 console.log(vm)
+console.log(vm.arr)

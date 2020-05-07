@@ -413,5 +413,425 @@ vm.arr[0] = "我改了"
 
 不仅如此，`vm.arr.length = 0`,当你这样设置数组长度时，也是无法监听到的。
 
+## 4.初始化渲染页面
+
+数据初始化之后，接下来，就要把初始化好的数据渲染到页面上去了也就是说当dom中有{{name}}这样的引用时，要把{{name}}替换成data里对应的数据
+
+```js
+MyVue.prototype._init = function (options) {
+    let vm = this;
+    // this.$options表示是Vue中的参数,如若我们细心的话我们发现vue框架的可读属性都是$开头的
+    vm.$options = options;
+
+    // MVVM原理 重新初始化数据  data
+    initState(vm)
+
+    // 初始化渲染页面
+    if (vm.$options.el){
+        vm.$mount()
+    }
+}
+```
+$mount的功能很显然就是
+1. 先获得dom树，
+2. 然后替换dom树中的数据，
+3. 然后再把新dom挂载到页面上去
+
+我们看下实现代码
+
+```js
+MyVue.prototype.$mount = function () {
+    let vm = this
+    let el = vm.$options.el
+    el = vm.$el = query(el) //获取当前节点
+
+    let updateComponent = () =>{
+        console.log("更新和渲染的实现");
+        vm._update()
+    }
+    new Watcher(vm,updateComponent)
+}
+```
+显然，我们并没有看到上面所说的
+1. 先获得dom树，
+2. 然后替换dom树中的数据，
+3. 然后再把新dom挂载到页面上去，
+
+那肯定是把 这些步骤放在 `vm._update()`的时候实现了。
+我们来看下update代码
+
+```js
+// 拿到数据更新视图
+MyVue.prototype._update = function () {
+    let vm = this
+    let el = vm.$el
+    // 1. 获取dom树
+    let node = document.createDocumentFragment()
+    let firstChild
+    while (firstChild = el.firstChild){
+        node.appendChild(firstChild)
+    }
+    // 2.然后替换dom树中的数据，
+    compiler(node,vm)
+
+    //3.然后再把新dom挂载到页面上去，
+    el.appendChild(node) 
+}
+```
+可见，这三个步骤在update的时候实现了。
+
+而这个update方法的执行需要 
+
+```js
+    let updateComponent = () =>{
+        console.log("更新和渲染的实现");
+        vm._update()
+    }
+```
+这个方法的执行，
+显然，这个方法是new Wacther的时候执行的。
+
+```js
+let id = 0
+class Watcher {
+    constructor(vm,exprOrFn,cb = ()=>{},opts){
+        this.vm = vm
+        this.exprOrFn = exprOrFn
+        this.cb = cb
+        this.id = id++
+        if (typeof exprOrFn === 'function'){
+            this.getter = exprOrFn
+        }
+        this.get()  // 创建一个watcher，默认调用此方法
+    }
+    get(){
+        this.getter()
+    }
+}
+export default Watcher
+```
+可见，this.getter就是我们传进去的`updateComponent`，然后在new Wacther的时候，就自动执行了。
+
+总结下思路，
+1. new Watcher的时候执行了 `updateComponent`
+2. 执行 `updateComponent` 的时候执行了 `update`
+3. 执行update的时候执行了 1. 先获得dom树，2. 然后替换dom树中的数据，3. 然后再把新dom挂载到页面上去
+
+现在我们就已经实现了初始化渲染。即把dom中{{}}表达式换成了data里的数据。
+
+上面用到的compile方法我们还没解释，其实，很简单
+
+```js
+const defaultRGE = /\{\{((?:.|\r?\n)+?)\}\}/g
+
+export const util = {
+    getValue(vm,exp){
+        let keys = exp.split('.')
+        return keys.reduce((memo,current)=>{
+            memo = memo[current]
+            return memo
+        },vm)
+    },
+    compilerText(node,vm){
+        node.textContent = node.textContent.replace(defaultRGE,function (...arg) {
+           return util.getValue(vm,arg[1])
+        })
+    }
+}
+
+export function compiler(node,vm) {
+    // 1 取出子节点、
+    let childNodes = node.childNodes
+    childNodes = Array.from(childNodes)
+    childNodes.forEach(child =>{
+        if (child.nodeType === 1 ){
+            compiler(child,vm)
+        }else if (child.nodeType ===3) {
+            util.compilerText(child,vm)
+        }
+    })
+}
+```
+
+
+## 5.更新数据渲染页面
+我们上一节只实现了 初始化渲染，这一节来实现 数据一旦修改就重新渲染页面。上一节中，我们是通过new Watcher()来初始化页面的，也就是说这个watcher具有重新渲染页面的功能，因此，我们一旦改数据的时候，就再一次让这个watcher执行刷新页面的功能。这里有必要解释下一个watcher对应一个组件，也就是说你new Vue 机会生成一个wacther，因此有多个组件的时候就会生成多个watcher。
+
+现在，我们给每一个data里的属性生成一个对应的dep。
+例如：
+
+```js
+data:{
+  age:18,
+  friend:{
+    name:"赵丽颖",
+    age:12
+  }
+}
+```
+上面中，age,friend,friend.name,friend.age分别对应一个dep。一共四个dep。dep的功能是用来通知上面谈到的watcher执行刷新页面的功能的。
+
+```js
+export function defineReactive(data,key,value) {
+    // 观察value是不是对象，是的话需要监听它的属性。
+    observe(value)
+    let dep = new Dep() // 新增代码：一个key对应一个dep
+    Object.defineProperty(data,key,{
+        get(){
+            return value
+        },
+        set(newValue){
+            if (newValue === value) return
+            value = newValue
+            observe(value)
+        }
+    })
+}
+```
+现在有一个问题，就是dep要怎么跟watcher关联起来，我们可以把watcher存储到dep里
+
+
+
+```js
+let id = 0
+class Dep {
+    constructor(){
+        this.id = id++
+        this.subs = []
+    }
+    addSub(watcher){ //订阅
+        this.subs.push(watcher)
+    }
+}
+```
+如代码所示，我们希望执行addSub方法就可以将watcher放到subs里。
+那什么时候可以执行addSub呢？
+
+我们在执行compile的时候，也就是将dom里的{{}}表达式换成data里的值的时候，因为要获得data里的值，因此会触发get。这样，我们就可以在get里执行addSub。而watcher是放在全局作用域的，我们可以直接重全局作用域中拿这个watcher放到传入addSub。
+
+好了，现在的问题就是，怎么把watcher放到全局作用域
+```js
+let id = 0
+class Watcher {
+    constructor(vm,exprOrFn,cb = ()=>{},opts){
+        this.vm = vm
+        this.exprOrFn = exprOrFn
+        this.cb = cb
+        this.id = id++
+        this.deps = []
+        this.depsId = new Set()
+        if (typeof exprOrFn === 'function'){
+            this.getter = exprOrFn
+        }
+        this.get()  // 创建一个watcher，默认调用此方法
+    }
+    get(){
+        pushTarget(this)
+        this.getter()
+        popTarget()
+    }
+}
+export default Watcher
+```
+可见，是通过pushTarget(this)放到全局作用域，再通过popTarget()将它移除。
+
+要知道，wachter和dep是多对多的关系，dep里要保存对应的watcher，watcher也要保存对应的dep
+因此，但我们触发get的时候，希望可以同时让当前的watcher保存当前的dep，也让当前的dep保存当前的wacther
+
+```js
+export function defineReactive(data,key,value) {
+    // 观察value是不是对象，是的话需要监听它的属性。
+    observe(value)
+    let dep = new Dep()
+    Object.defineProperty(data,key,{
+        get(){
+            if (Dep.target){
+                dep.depend() //让dep保存watcher，也让watcher保存这个dep
+            }
+            return value
+        },
+        set(newValue){
+            if (newValue === value) return
+            value = newValue
+            observe(value)
+
+        }
+    })
+}
+```
+
+让我们看下depend方法怎么实现
+
+
+```js
+let id = 0
+class Dep {
+    constructor(){
+        this.id = id++
+        this.subs = []
+    }
+    addSub(watcher){ //订阅
+        this.subs.push(watcher)
+    }
+    depend(){
+        if (Dep.target){
+            Dep.target.addDep(this)
+        }
+    }
+}
+// 保存当前watcher
+let stack = []
+export function pushTarget(watcher) {
+    Dep.target = watcher
+    stack.push(watcher)
+}
+export function popTarget() {
+    stack.pop()
+    Dep.target = stack[stack.length - 1]
+}
+
+export default Dep
+
+```
+可见depend方法又执行了watcher里的addDep，看一下watcher里的addDep。
+
+```js
+import {pushTarget , popTarget} from "./dep"
+let id = 0
+class Watcher {
+    constructor(vm,exprOrFn,cb = ()=>{},opts){
+        this.vm = vm
+        this.exprOrFn = exprOrFn
+        this.cb = cb
+        this.id = id++
+        this.deps = []
+        this.depsId = new Set()
+        if (typeof exprOrFn === 'function'){
+            this.getter = exprOrFn
+        }
+        this.get()  // 创建一个watcher，默认调用此方法
+    }
+    get(){
+        pushTarget(this)
+        this.getter()
+        popTarget()
+    }
+    update(){
+        this.get()
+    }
+    addDep(dep){
+        let id = dep.id
+        if(this.depsId.has(id)){
+            this.depsId.add(id)
+            this.deps.push(dep)
+        }
+        dep.addSub(this)
+    }
+}
+export default Watcher
+
+```
+
+如此一来，就让dep和watcher实现了双向绑定。
+这里代码，你可能会有个疑问，就是为什么是用一个stack数组来保存watcher，这里必须解释下，因为每一个watcher是对应一个组件的，也就是说，当页面中有多个组件的时候，就会有多个watcher，而多个组件的执行是依次执行的，也就是说Dep.target中 只会有 当前被执行的组件所对应的watcher。
+
+例如，有一道面试题：父子组件的执行顺序是什么？
+
+答案：在组件开始生成到结束生成的过程中，如果该组件还包含子组件，则自己开始生成后，要让所有的子组件也开始生成，然后自己就等着，直到所有的子组件生成完毕，自己再结束。“父亲”先开始自己的created，然后“儿子”开始自己的created和mounted，最后“父亲”再执行自己的mounted。
+
+为什么会这样，到这里我们就应该发现了，new Vue的时候是先执行initData，也就是初始化数据，然后执行$mounted,也就是new Watcher。而初始化数据的时候，也要处理components里的数据。处理component里的数据的时候，每处理一个子组件就会new Vue，生成一个子组件。因此是顺序是这样的。也就对应了上面的答案。
+1. 初始化父组件数据-->
+2. 初始化 子组件数据 -->
+3. new 子组件Wacther -->
+4. new 父组件Watcher
+
+好，言归正传，回到我们的项目来，接下来要实现的就是 当有数据更改的时候，我们要重新渲染页面。而我们可以通过set来监听数据是否被更改，因此基本步骤为：
+
+1. set监听到数据被更改
+2. 让dep执行dep.notify()通知与它相关的watcher
+3. watcher执行update，重新渲染页面
+
+
+```js
+ Object.defineProperty(data,key,{
+        get(){
+            if (Dep.target){
+                dep.depend() //让dep保存watcher，也让watcher保存这个dep
+            }
+            return value
+        },
+        set(newValue){
+            if (newValue === value) return
+            value = newValue
+            observe(value)
+
+            // 当设置属性的时候，通知watcher更新
+            dep.notify()
+
+        }
+    })
+```
+
+dep添加notify方法
+```js
+class Dep {
+    constructor(){
+        this.id = id++
+        this.subs = []
+    }
+    addSub(watcher){ //订阅
+        this.subs.push(watcher)
+    }
+    notify(){ //发布
+        this.subs.forEach(watcher =>{
+            watcher.update()
+        })
+    }
+    depend(){
+        if (Dep.target){
+            Dep.target.addDep(this)
+        }
+    }
+}
+```
+
+
+watcher添加update方法
+```js
+class Watcher {
+    constructor(vm,exprOrFn,cb = ()=>{},opts){
+        this.vm = vm
+        this.exprOrFn = exprOrFn
+        this.cb = cb
+        this.id = id++
+        this.deps = []
+        this.depsId = new Set()
+        if (typeof exprOrFn === 'function'){
+            this.getter = exprOrFn
+        }
+        this.get()  // 创建一个watcher，默认调用此方法
+    }
+    get(){
+        pushTarget(this)
+        this.getter()
+        popTarget()
+    }
+    update(){
+        this.get()
+    }
+    addDep(dep){
+        let id = dep.id
+        if(this.depsId.has(id)){
+            this.depsId.add(id)
+            this.deps.push(dep)
+        }
+        dep.addSub(this)
+    }
+}
+export default Watcher
+```
+
+
+
 源码地址：https://github.com/peigexing/myvue
 
