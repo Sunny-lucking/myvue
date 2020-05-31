@@ -831,6 +831,420 @@ class Watcher {
 export default Watcher
 ```
 
+## 5. 批量更新防止重复渲染
+
+上面我们是每更改一个数据，就会通知watcher重新渲染页面，显然，要是我们在一个组件里更改多个数据，那么就会多次通知wathcer渲染页面，因此这节我们来实现 批量更新，防止重复渲染。
+怎么解决呢？
+
+我们知道，每更新一个数据，就会触发dep.notify。而如果组件里的多个数据都更新的话，就会多次触发dep.notyfy。因为是同一个组件里的数据，因此，这些dep.notify通知的是同一个watcher 执行update。显然，这是没必要的，我们只希望先让所有的数据都修改完，再统一让watcher执行一次update。
+
+该怎么实现呢？我们可以创建一个数组queue，来放置即将渲染页面的watcher。所以，我们先要判断这些dep通知的是不是同一个watcher。不相同的话就放入queue里，相同的就不放。（queue就是个去重数组）。基于此，我们可以更改Watcher里的update方法。
+
+
+
+```js
+class Watcher {
+    constructor(vm,exprOrFn,cb = ()=>{},opts){
+        。。。
+        this.get()  // 创建一个watcher，默认调用此方法
+    }
+    get(){
+        pushTarget(this)
+        this.getter()
+        popTarget()
+    }
+    update(){
+        // this.get()
+        queueWacther(this) //修改代码
+    }
+    // 新增代码
+    run(){
+        this.get()
+    }
+
+}
+// 新增代码
+let has = {}
+let queue = []
+function queueWacther(watcher) {
+    let id = watcher.id
+    if(has[id] == null){
+        has[id] = true
+        queue.push(watcher)
+    }
+}
+```
+这样一来，queue里放置的就是不同的wathcer。
+
+接下，再执行queue里的watcher.run。
+
+```js
+let has = {}
+let queue = []
+// 新增代码
+function flushQueue() {
+    console.log("执行了flushQueue");
+    queue.forEach(watcher=>{
+        watcher.run()
+    })
+    has = []
+    queue = []
+}
+function queueWacther(watcher) {
+    let id = watcher.id
+    if(has[id] == null){
+        has[id] = true
+        queue.push(watcher)
+    }
+}
+```
+记得执行完要清空queue队列。
+
+但是有个重要的事情，就是queue里的watcher.run必须要异步执行。
+
+
+现在就是要异步执行queue里的watcher.run()。
+我们可以把重新渲染的动作放到异步队列里（可以通过promise.then放到微任务队列里）。而修改数据是在主线程上的，因此，会先执行完主线程才会执行异步队列里的方法。
+
+
+```js
+let has = {}
+let queue = []
+function flushQueue() {
+    console.log("执行了flushQueue");
+    queue.forEach(watcher=>{
+        watcher.run()
+    })
+    has = []
+    queue = []
+}
+function queueWacther(watcher) {
+    let id = watcher.id
+    if(has[id] == null){
+        has[id] = true
+        queue.push(watcher)
+    }
+    nextTick(flushQueue) //新增代码：异步执行flushQueue
+}
+//新增代码：异步执行flushQueue
+function nextTick(flushQueue) {
+    Promise.resolve().then(flushQueue)
+}
+```
+实际上这就已经完成了批量更新和防止重复渲染。
+
+但是为了贴近vue源码，我们更改下nextTick。使用vue的相信都用过nextTick，因此也就是说我们会在其他地方调用nextTick，而且我们是经常这样使用的
+
+```js
+this.$nextTick(() => {
+    this.msg2 = this.$refs.msgDiv.innerHTML
+})
+```
+也就是说我们会传进个回调函数，而我们上面写的nextTick参数也是一个回调函数。
+那么我们可以把其他地方调用nextTick的回调函数 一起整合进一个callback，然后统一执行callback。
+
+
+因此，我们做如下更改
+```js
+// 新增代码
+let callbacks = []
+function flushCallbacks() {
+    callbacks.forEach(cb=>cb())
+    callbacks = []
+}
+
+function nextTick(flushQueue) {
+    callbacks.push(flushQueue) //新增代码
+
+    Promise.resolve().then(flushCallbacks
+}
+```
+
+## 6.实现数组依赖收集
+上面我们只是对数组实现了方法的拦截，还没实现数据的更新渲染。
+现在要解决连个问题
+1. 在哪里收集依赖
+2. 依赖保存在哪里
+
+实际上依赖收集依旧是在getter里实现的。
+
+因为当我们 获取`list:[1,2,3]`的时候会触发get，所以可以在getter里收集依赖。
+
+那保存在哪里呢？保存在Observe里，因为在拦截方法中可以获得observe，而在set里也可以获得observe。
+
+
+```js
+class Observe {
+    constructor(data){ // data就是我们定义的data vm._data实例
+        // 将用户的数据使用defineProperty定义
+        // 创建数组专用 的dep
+        this.dep = new Dep()
+        // 给我们的对象包括我们的数组添加一个属性__ob__ (这个属性即当前的observe)
+        Object.defineProperty(data,'__ob__',{
+            get:() => this
+        })
+        if (Array.isArray(data)){
+            data.__proto__ = arrayMethods
+            observerArray(data)
+        }else {
+            this.walk(data)
+        }
+    }
+   
+}
+```
+我们在这里返回了一个Observe对象。
+
+然后我们需要在拦截方法里notify
+
+```js
+methods.forEach(method=>{
+    arrayMethods[method] = function (...arg) {
+        // 不光要返回新的数组方法，还要执行监听
+        let res = oldArrayPrototypeMethods[method].apply(this,arg)
+        // 实现新增属性的监听
+        console.log("我是{}对象中的push,我在这里实现监听");
+        // 实现新增属性的监听
+        let inserted
+        switch (method) {
+            case 'push':
+            case 'unshift':
+                inserted = arg
+                break
+            case 'splice':
+                inserted = arg.slice(2)
+                break
+            default:
+                break
+        }
+        // 实现新增属性的监听
+        if (inserted){
+            observerArray(inserted)
+        }
+        this.__ob__.dep.notify()
+        return res
+    }
+})
+```
+
+现在保存依赖和通知更新的问题都解决了，下一步就是在setter里依赖收集
+
+## 7.watch的实现
+
+现在在initState中添加初始化watch
+
+```js
+export function initState(vm) {
+    let opt = vm.$options
+    if (opt.data){
+        initData(vm);
+    }
+    if (opt.watch){
+        initWathch(vm);
+    }
+}
+```
+
+我们现在原型对象上实现一个方法
+
+```js
+MyVue.prototype.$watch = function (key,handler) {
+    let vm = this
+    new Watcher(vm,key,handler,{user:true})
+    
+}
+```
+这个方法为我们的watch中的key 单独创建了一个Watch实例，其中handler是回调方法。
+
+我们希望初始化（即 new Watch ）的时候，先获得key的oldValue。方便后面和newValue比较是否发生变化。
+
+
+```js
+class Watcher {
+    constructor(vm,exprOrFn,cb = ()=>{},opts){
+        // 省略其他代码
+        if (typeof exprOrFn === 'function'){
+            this.getter = exprOrFn
+        }else{
+            // 现在exprOrFn是我们传进来的key
+            this.getter = function () {
+                return util.getValue(vm,key)
+            }
+        }
+        this.value = this.get() //获得老值oldValue
+        // 创建一个watcher，默认调用此方法
+    }
+    get(){
+        pushTarget(this)
+        let value = this.getter()
+        popTarget()
+        return value
+    }
+
+```
+
+当key的值改变的时候，会触发dep.notify。也就会触发wathcer.update ,然后触发watcher.run 
+
+我们在 run中获得新值，然后 将新值与老值进行比较，如果两者不等的话，就触发回调函数
+```js
+    run(){
+        let value = this.get()
+        if (this.value !== value){
+            this.cb(value,this.value)
+        }
+    }
+```
+
+ok，现在来继续初始化initWatch
+
+```js
+function initWathch(vm) {
+    let watch = vm.$options.watch
+    for (let key in watch){
+        let handler = watch[key]
+        createWatch(vm,key,handler)
+    }
+}
+function createWatch(vm,key,handler) {
+    return this.$watch(vm,key,handler)
+}
+```
+可见，其实核心思想就是给每个key 生成一个Watcher实例，来监听key的值的变化。
+
+
+## 8. computed 实现
+
+想要写computed，必须先知道computed 是有缓存的。
+
+先来初始化computed
+
+
+```js
+function initComputed(vm,computed) {
+    let watchers = vm._watcherComputed = Object.create(null)
+    for(let key in computed){
+        let userDef = computed[key]
+        watchers[key] = new Watcher(vm,userDef,()=>{},{lazy:true})
+    }
+}
+```
+
+可见，是先生成一个__watcherComputed的空对象挂载都vm里，
+然后遍历computed，给每个computed 生成一个Watcher实例，一个key对应一个Wacther实例。
+然后保存到_watcherComputed里。
+
+现在修改一下watcher，我们每new Watcher的时候就计算好key对应的值。然后保存在Watcher实例里。
+
+现在我们不希望自动调用Watcher里的get方法。当 computed的值改变时，再执行get，也就是computed的所有数据依赖有改变的时候再执行get（）。
+
+
+```js
+class Watcher {
+    constructor(vm,exprOrFn,cb = ()=>{},opts){
+        this.lazy = opts.lazy
+        this.dirty = this.lazy
+        if (typeof exprOrFn === 'function'){
+            this.getter = exprOrFn
+        }else{
+            // 现在exprOrFn是我们传进来的key
+            this.getter = function () {
+                return util.getValue(vm,exprOrFn)
+            }
+        }
+        this.value = this.lazy? undefined : this.get() //获得老值oldValue
+        // 创建一个watcher，默认调用此方法
+    }
+```
+
+当用户取值的时候，我们将key定义到vm上，并且返回value
+
+
+```js
+function createComputedGetter(vm,key) {
+    let watcher = vm._watcherComputed[key]
+    return function () {
+        if (watch) {
+            if (watcher.dirty){
+                // 页面取值的时候，dirty如果为true，就会调用get方法计算
+                watcher.evalValue()
+            }
+            return watcher.value
+        }
+    }
+}
+function initComputed(vm,computed) {
+    let watchers = vm._watcherComputed = Object.create(null)
+    for(let key in computed){
+        let userDef = computed[key]
+        watchers[key] = new Watcher(vm,userDef,()=>{},{lazy:true})
+
+        // 当用户取值的时候，我们将key定义到vm上
+        Object.defineProperty(vm,key,{
+            get:createComputedGetter(vm,key)
+        })
+    }
+```
+`evalValue`方法的实现非常简单
+
+
+```js
+    evalValue(){
+        this.value = this.get()
+        this.dirty = false
+    }
+```
+现在已经成功获得computed返回的值了，
+
+接下来，要实现的是，当computed的依赖列表中，有变化的话，就要把dirty设置为true，重新赋予value新值
+
+当computed里的依赖列表有变化时，就通知watcher.update。需要把dirty改为true。
+
+
+```js
+    update(){
+        // this.get()
+        // 批量更新， 防止重复渲染
+        if (this.lazy){ // 如果是计算属性
+            this.dirty = true
+        }else{
+            queueWacther(this)
+        }
+    }
+```
+
+现在解决依赖收集的问题
+
+```js
+
+function createComputedGetter(vm,key) {
+    let watcher = vm._watcherComputed[key]
+    return function () {
+        if (watcher) {
+            if (watcher.dirty){
+                // 页面取值的时候，dirty如果为true，就会调用get方法计算
+                watcher.evalValue()
+            }
+            if (Dep.target){
+                watcher.depend()
+            }
+            return watcher.value
+        }
+    }
+}
+```
+
+
+```js
+    depend(){
+        let i = this.deps.length
+        while(i--){
+            this.deps[i].depend()
+        }
+    }
+```
+
+
+
 
 
 源码地址：https://github.com/peigexing/myvue
