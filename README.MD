@@ -54,6 +54,19 @@ module.exports = {
 ==========
 #### 2.1 创建构造函数MyVue
 
+function MyVue(options) {
+    this._init(options)
+}
+
+MyVue.prototype._init = function (options) {
+    let vm = this;
+    // this.$options表示是Vue中的参数,如若我们细心的话我们发现vue框架的可读属性都是$开头的
+    vm.$optios = options;
+
+    // MVVM原理 重新初始化数据  data
+    initState(vm)
+}
+
 并初始化用户传入的参数`options`，我们先假设用户传入的`options`是只有`data`属性和`el`属性的。
 
 
