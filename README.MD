@@ -1043,6 +1043,36 @@ methods.forEach(method=>{
 
 现在保存依赖和通知更新的问题都解决了，下一步就是在setter里依赖收集
 
+```js
+export function defineReactive(data,key,value) {
+    // 观察value是不是对象，是的话需要监听它的属性。
+    let childOb = observe(value)
+    let dep = new Dep()
+    Object.defineProperty(data,key,{
+        get(){
+            if (Dep.target){
+                dep.depend() //让dep保存watcher，也让watcher保存这个dep
+
+                if (childOb){
+                    childOb.dep.depend()
+                    dependArray(value) //收集儿子的依赖
+                }
+            }
+            return value
+        },
+        set(newValue){
+            if (newValue === value) return
+            value = newValue
+            observe(value)
+
+            // 当设置属性的时候，实现更新
+            dep.notify()
+
+        }
+    })
+}
+```
+
 ## 7.watch的实现
 
 现在在initState中添加初始化watch
