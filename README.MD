@@ -1043,6 +1043,21 @@ methods.forEach(method=>{
 
 现在保存依赖和通知更新的问题都解决了，下一步就是在setter里依赖收集
 
+
+```js
+// 递归收集依赖
+export function dependArray(value){
+    for(let i = 0; i <value.length; i++){
+        let currentItem = value[i]
+        currentItem.__ob__ && currentItem.__ob__.dep.depend()
+        if (Array.isArray(currentItem)) {
+            dependArray(currentItem)
+        }
+    }
+}
+
+```
+
 ```js
 export function defineReactive(data,key,value) {
     // 观察value是不是对象，是的话需要监听它的属性。
